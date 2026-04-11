@@ -19,7 +19,7 @@
     "require": {
         "php": ">=8.3",
         "cakephp/cakephp": "^5.2.0",
-        "dereuromark/cakephp-audit-stash": "^6.0"
+        "dereuromark/cakephp-audit-stash": "^1.0"
     },
     "require-dev": {
         "phpunit/phpunit": "^11.5 || ^12.1",
