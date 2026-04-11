@@ -7,3 +7,6 @@ parameters:
 	ignoreErrors:
 		- identifier: missingType.iterableValue
 		- identifier: missingType.generics
+		-
+			message: '#Trait .+\\RequiresDualApprovalTrait is used zero times#'
+			path: src/DualApproval/Traits/RequiresDualApprovalTrait.php
