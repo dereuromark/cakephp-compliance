@@ -1,86 +1,194 @@
-        # Compliance Plugin for CakePHP
+# Compliance Plugin for CakePHP
 
-        [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
-        [![Minimum PHP Version](https://img.shields.io/badge/php-%3E%3D%208.3-8892BF.svg)](https://php.net/)
-        [![Status](https://img.shields.io/badge/status-0.x%20unstable-orange.svg?style=flat-square)](#status)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Minimum PHP Version](https://img.shields.io/badge/php-%3E%3D%208.3-8892BF.svg)](https://php.net/)
+[![CakePHP](https://img.shields.io/badge/cakephp-%3E%3D%205.2-red.svg?style=flat-square)](https://cakephp.org/)
+[![Status](https://img.shields.io/badge/status-0.x%20unstable-orange.svg?style=flat-square)](#status)
 
-        > **Status: 0.x unstable.** API may break before 1.0. Pin to `^0.1` in production and read the CHANGELOG before upgrading minor versions. Cut to `1.0` once the API has stabilized across two or more real consumers.
+DACH compliance primitives for CakePHP 5.x — bundled into one focused plugin so you don't have to wire four micro-packages to get the baseline every German SaaS needs.
 
-        A focused CakePHP 5.x plugin bundling the every-request compliance plumbing that any DACH vertical-SaaS application needs: German GoBD §147 AO retention and immutability (with a hash-chained audit log on top of `dereuromark/cakephp-audit-stash`), default-deny multi-tenant query isolation, gap-free per-tenant-per-year document number sequencing, and a two-person integrity framework for high-stakes actions.
+> **Status: 0.x unstable.** API may break before 1.0. Pin to `^0.1` in production and read [CHANGELOG.md](CHANGELOG.md) before upgrading. Cut to 1.0 once the API has stabilized across two or more real consumers.
 
-These four concerns are bundled because they are always installed together in real DACH apps — separating them would just force users to `composer require` four things. Each concern lives under its own sub-namespace (`Compliance\\Gobd`, `Compliance\\TenantScope`, `Compliance\\Numbering`, `Compliance\\DualApproval`) so the internal boundaries stay clean.
+## What's in the box
 
-        ## Features
+Four sub-concerns that are always installed together in real DACH apps:
 
-        - **GoBD**: retention (10-year enforcement), immutability (DB-level `BEFORE UPDATE` triggers on finalized rows), hash-chained audit persister.
-- **TenantScope**: default-deny multi-tenant scoping with configurable scope column, `forTenant()` finder, middleware throwing `MissingScopeException` on unscoped queries, `AbstractTenantScopedPolicy` base class.
-- **Numbering**: gap-free, race-safe per-tenant-per-year `Sequencer` with transactional `SELECT ... FOR UPDATE` allocation, append-only audit table for rolled-back allocations, format templates frozen after first use.
-- **DualApproval**: pending-approval storage, middleware gating protected actions, default HTMX/Alpine UI partials, pluggable notification hooks, full audit integration.
-- All four concerns are co-versioned — one `composer require`, one `bin/cake plugin load`.
-- Phinx migration templates shipped for Postgres 14+ and MySQL 8.0.16+.
+| Sub-area | Purpose | Key classes |
+|---|---|---|
+| **Gobd** | German GoBD §147 AO retention + immutability + hash-chained audit log | `GobdBehavior`, `ImmutabilityBehavior`, `HashChain`, `HashChainAuditPersister`, `VerifyChainCommand`, `RetentionReportCommand` |
+| **TenantScope** | Default-deny multi-tenant query isolation | `TenantScopeRegistry`, `TenantScopeBehavior`, `TenantScopeMiddleware`, `AbstractTenantScopedPolicy`, `MissingScopeException` |
+| **Numbering** | Gap-free, race-safe per-tenant-per-year document number sequencer | `Sequencer`, `SequenceFormatFrozenException` |
+| **DualApproval** | Two-person integrity workflow for high-stakes actions | `ApprovalService`, `DualApprovalMiddleware`, `RequiresDualApprovalTrait`, `PendingApproval` entity + table |
 
-        ## Structure
+Each concern lives under its own sub-namespace (`Compliance\Gobd\…`, `Compliance\TenantScope\…`, etc.) so internal boundaries stay clean even though everything ships under one Composer package.
 
-This plugin is internally organized into focused sub-areas under the main namespace:
+## Why bundled?
 
-### `Compliance\Gobd`
+A DACH SaaS app that needs GoBD retention **also** needs tenant isolation, **also** needs gap-free invoice numbering, **and** benefits from dual-approval on high-stakes actions. These four concerns travel together. Shipping them as four micro-plugins would just force you to `composer require` four things. Internal sub-namespacing keeps the separation without the packaging overhead.
 
-- `Gobd/Model/Behavior/GobdBehavior`
-- `Gobd/Model/Behavior/ImmutabilityBehavior`
-- `Gobd/Persister/HashChainAuditPersister`
-- `Gobd/Command/VerifyChainCommand`
-- `Gobd/Command/RetentionReportCommand`
+## Installation
 
-### `Compliance\TenantScope`
+```bash
+composer require dereuromark/cakephp-compliance
+bin/cake plugin load Compliance
+```
 
-- `TenantScope/Model/Behavior/TenantScopeBehavior`
-- `TenantScope/Middleware/TenantScopeMiddleware`
-- `TenantScope/Exception/MissingScopeException`
-- `TenantScope/Policy/AbstractTenantScopedPolicy`
+Requires **PHP 8.3+** and **CakePHP 5.2+**.
 
-### `Compliance\Numbering`
+## Quick start
 
-- `Numbering/Service/Sequencer`
-- `Numbering/Model/Table/SequencesTable`
-- `Numbering/Model/Table/SequenceAuditTable`
-- `Numbering/Exception/SequenceFormatFrozenException`
+### GoBD retention on a ledger table
 
-### `Compliance\DualApproval`
+```php
+// src/Model/Table/LedgerEntriesTable.php
+public function initialize(array $config): void
+{
+    parent::initialize($config);
+    $this->addBehavior('Compliance.Gobd', [
+        'retentionYears' => 10,
+        'dateField' => 'booked_on',
+    ]);
+}
+```
 
-- `DualApproval/Service/ApprovalService`
-- `DualApproval/Model/Table/PendingApprovalsTable`
-- `DualApproval/Model/Entity/PendingApproval`
-- `DualApproval/Middleware/DualApprovalMiddleware`
-- `DualApproval/Traits/RequiresDualApprovalTrait`
+A `$table->delete($row)` on an entry whose `booked_on` is inside the 10-year retention window throws `GobdRetentionException`.
 
+### Immutability on finalized invoices
 
-        ## Installation
+```php
+$this->addBehavior('Compliance.Immutability', ['field' => 'finalized_at']);
+```
 
-        Install via [composer](https://getcomposer.org):
+Once `finalized_at` is set on a row, subsequent `save()` or `delete()` calls throw `ImmutableRowException`. The transition from NULL to a set value (the finalize action) is allowed exactly once.
 
-        ```bash
-        composer require dereuromark/cakephp-compliance
-        bin/cake plugin load Compliance
-        ```
+### Tenant-scoped table
 
-        ## Usage
+```php
+// Table
+$this->addBehavior('Compliance.TenantScope', ['field' => 'account_id']);
 
-        > This is a 0.x skeleton. Usage examples will appear here as the API stabilizes. See the `docs/` folder for architecture notes and the `tests/` folder for working examples.
+// Middleware (Application::middleware)
+$middlewareQueue->add(new \Compliance\TenantScope\Middleware\TenantScopeMiddleware([
+    'attribute' => 'accountId',
+]));
 
-        ## Motivation
+// Authenticated middleware upstream sets:
+$request = $request->withAttribute('accountId', $user->account_id);
+```
 
-        This plugin is part of a three-plugin family extracted from real DACH vertical-SaaS products (landlord billing, freelancer invoicing, Vereinsverwaltung) where German legal and tax requirements shape the architecture:
+All `find()` queries on the scoped table are automatically filtered by the active tenant. `save()` auto-stamps the tenant field. Any query run without an active tenant throws `MissingScopeException`.
 
-        - **`dereuromark/cakephp-compliance`** — GoBD retention, multi-tenant scoping, gap-free numbering, dual-approval workflows. Every-request compliance plumbing.
-        - **`dereuromark/cakephp-accounting`** — §286 / §288 BGB dunning calculators and DATEV CSV export. German accounting workflow.
-        - **`dereuromark/cakephp-sepa`** — IBAN / BIC / Creditor ID validation and CAMT.053 / CAMT.054 parsing with German bank-quirk normalization. SEPA banking primitives.
+Need to query across tenants for admin tooling? Use the `acrossTenants` finder:
 
-        Each plugin bundles tightly-cohesive sub-concerns under sub-namespaces so installation is one `composer require` per domain area rather than a scattershot of micro-packages.
+```php
+$table->find('acrossTenants')->all();
+```
 
-        ## Contributing
+### Gap-free invoice numbers
 
-        PRs welcome. Please include tests, run PHPStan (`composer stan`) and PHPCS (`composer cs-check`) before submitting, and sign off commits per the DCO.
+```php
+use Compliance\Numbering\Service\Sequencer;
+use Cake\Datasource\ConnectionManager;
 
-        ## License
+$sequencer = new Sequencer(ConnectionManager::get('default'));
+$next = $sequencer->next('account-42', 'invoice', 2026, '{YYYY}-{####}');
+// → "2026-0001"
+```
 
-        MIT. See [LICENSE](LICENSE).
+First call for `(account-42, invoice, 2026)` freezes the format template. Attempts to use a different format for the same sequence throw `SequenceFormatFrozenException`. Every allocation is logged append-only to `compliance_sequence_audit` including rolled-back ones, so an auditor can explain any gap in the sequence.
+
+**Schema setup** (once per installation, see [docs/Numbering.md](docs/Numbering.md)):
+
+```sql
+CREATE TABLE compliance_sequences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope VARCHAR(100) NOT NULL,
+    sequence_key VARCHAR(100) NOT NULL,
+    year INTEGER NOT NULL,
+    format VARCHAR(100) NOT NULL,
+    current_value INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(scope, sequence_key, year)
+);
+
+CREATE TABLE compliance_sequence_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope VARCHAR(100) NOT NULL,
+    sequence_key VARCHAR(100) NOT NULL,
+    year INTEGER NOT NULL,
+    allocated_value INTEGER NOT NULL,
+    allocated_token VARCHAR(100) NOT NULL,
+    committed INTEGER NOT NULL DEFAULT 0,
+    created DATETIME NOT NULL
+);
+```
+
+### Dual approval for high-stakes actions
+
+```php
+use Compliance\DualApproval\ApprovalService;
+
+$service = new ApprovalService();
+
+// Step 1 — first user requests the action
+$approval = $service->request(
+    action: 'close_cashbook',
+    payload: ['year' => 2026],
+    initiatorId: $currentUser->id,
+);
+
+// Step 2 — second user approves (must be different from initiator)
+$service->approve((int)$approval->get('id'), $secondUser->id);
+// Or rejects:
+$service->reject((int)$approval->get('id'), $secondUser->id, 'Missing documentation');
+```
+
+`ApprovalConflictException` is thrown if the same user tries to both request and approve.
+
+### Hash-chained audit log (GoBD tamper-evident)
+
+```php
+// On any Table with financial data:
+$this->addBehavior('AuditStash.AuditLog', [
+    'persister' => \Compliance\Gobd\Persister\HashChainAuditPersister::class,
+]);
+```
+
+Every create/update/delete is logged into `compliance_audit_chain` with a SHA-256 hash chaining each row to its predecessor. Tampering with any historical row breaks the chain and is detected by:
+
+```bash
+bin/cake gobd verify_chain
+```
+
+## Documentation
+
+- [docs/Gobd.md](docs/Gobd.md) — GoBD retention, immutability, hash chain, migration templates
+- [docs/TenantScope.md](docs/TenantScope.md) — multi-tenant scoping patterns, authorization policies
+- [docs/Numbering.md](docs/Numbering.md) — gap-free sequencer, concurrency semantics, schema
+- [docs/DualApproval.md](docs/DualApproval.md) — two-person workflow, middleware integration, UI patterns
+
+## Testing
+
+```bash
+composer install
+composer test      # PHPUnit — in-memory SQLite
+composer stan      # PHPStan level 8
+composer cs-check  # PhpCollective code style
+```
+
+All tests run in under a second against an in-memory SQLite database. No external service dependencies.
+
+## Related plugins
+
+Part of a family of focused DACH-compliance plugins for CakePHP 5.x:
+
+- **`dereuromark/cakephp-compliance`** — this plugin. Every-request compliance plumbing.
+- **`dereuromark/cakephp-accounting`** — §286 / §288 BGB dunning + DATEV CSV export.
+- **`dereuromark/cakephp-sepa`** — IBAN / BIC / Creditor ID validation + CAMT.053 / CAMT.054 parsing.
+
+## Contributing
+
+PRs welcome. Please include tests, run PHPStan (`composer stan`) and PHPCS (`composer cs-check`) before submitting, and sign off commits per the DCO.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
