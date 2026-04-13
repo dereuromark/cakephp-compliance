@@ -9,6 +9,6 @@ use Cake\Core\BasePlugin;
 /**
  * Compliance Plugin for CakePHP — main plugin class.
  */
-class Plugin extends BasePlugin
+class CompliancePlugin extends BasePlugin
 {
 }
