@@ -20,14 +20,10 @@
         "php": ">=8.3",
         "cakephp/cakephp": "^5.2.0"
     },
-    "suggest": {
-        "dereuromark/cakephp-audit-stash": "Required to use the HashChainAuditPersister; see docs/Gobd.md."
-    },
     "require-dev": {
         "phpunit/phpunit": "^11.5 || ^12.1 || ^13.1",
         "php-collective/code-sniffer": "dev-master",
-        "phpstan/phpstan": "^2.0.0",
-        "dereuromark/cakephp-audit-stash": "^1.0.0"
+        "phpstan/phpstan": "^2.0.0"
     },
     "autoload": {
         "psr-4": {
