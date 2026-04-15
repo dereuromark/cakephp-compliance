@@ -53,25 +53,40 @@ $rejected = $service->reject(
 
 ## Data model
 
-```sql
-CREATE TABLE pending_approvals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    action VARCHAR(100) NOT NULL,
-    payload TEXT NOT NULL, -- JSON
-    initiator_id VARCHAR(50) NOT NULL,
-    approver_id VARCHAR(50) NULL,
-    status VARCHAR(20) NOT NULL, -- pending | approved | rejected
-    reason TEXT NULL,
-    created DATETIME NOT NULL,
-    modified DATETIME NOT NULL,
-    resolved_at DATETIME NULL
-);
+The plugin ships a migration for the backing `pending_approvals` table.
+Run it from your application with the standard plugin migration command:
 
-CREATE INDEX idx_pending_approvals_status ON pending_approvals(status);
-CREATE INDEX idx_pending_approvals_initiator ON pending_approvals(initiator_id);
+```bash
+bin/cake migrations migrate -p Compliance
 ```
 
-The `payload` column is declared as the `json` column type inside `PendingApprovalsTable::initialize()` — CakePHP transparently encodes/decodes it, so consumers pass arrays and receive arrays.
+or add it to your `composer.json` `migrate` script alongside your other
+plugin migrations:
+
+```json
+"migrate": [
+    "bin/cake migrations migrate -p Compliance --no-lock",
+    "bin/cake migrations migrate --no-lock"
+]
+```
+
+Columns:
+
+| Column         | Type           | Notes |
+|----------------|----------------|-------|
+| `id`           | auto-increment | |
+| `action`       | VARCHAR(100)   | Symbolic action name (e.g. `close_cashbook`) |
+| `payload`      | TEXT / JSON    | Registered as the `json` column type by `PendingApprovalsTable::initialize()`, so consumers pass/receive arrays transparently |
+| `initiator_id` | VARCHAR(50)    | Reference to the user that raised the approval |
+| `approver_id`  | VARCHAR(50)    | Second user that approved/rejected; null while pending |
+| `status`       | VARCHAR(20)    | `pending` \| `approved` \| `rejected`, default `pending` |
+| `reason`       | TEXT           | Optional rejection reason |
+| `created`      | DATETIME       | |
+| `modified`     | DATETIME       | |
+| `resolved_at`  | DATETIME       | Set when status moves off `pending` |
+
+Indexes on `status` and `initiator_id` for the common admin queries
+(pending dashboards, initiator-scoped history).
 
 ---
 
