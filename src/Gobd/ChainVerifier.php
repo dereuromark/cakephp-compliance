@@ -6,6 +6,7 @@ namespace Compliance\Gobd;
 
 use Cake\Database\Connection;
 use Cake\Datasource\ConnectionManager;
+use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 use Throwable;
@@ -29,6 +30,12 @@ class ChainVerifier
 
     public function verify(int $chunkSize = 500): ChainVerificationResult
     {
+        if ($chunkSize < 1) {
+            throw new InvalidArgumentException(
+                sprintf('ChainVerifier chunk size must be >= 1, got %d.', $chunkSize),
+            );
+        }
+
         $this->assertHashChainReady();
 
         $rowsChecked = 0;
@@ -68,7 +75,21 @@ class ChainVerifier
                     );
                 }
 
-                $payload = $this->decodePayload((string)$row['payload'], $id);
+                try {
+                    $payload = $this->decodePayload((string)$row['payload']);
+                } catch (JsonException $exception) {
+                    return ChainVerificationResult::broken(
+                        $id,
+                        $rowsChecked,
+                        sprintf('invalid JSON payload: %s', $exception->getMessage()),
+                    );
+                } catch (RuntimeException $exception) {
+                    return ChainVerificationResult::broken(
+                        $id,
+                        $rowsChecked,
+                        $exception->getMessage(),
+                    );
+                }
                 $recomputed = HashChain::hash($storedPrev, $payload);
                 if (!hash_equals($recomputed, $storedHash)) {
                     return ChainVerificationResult::broken(
@@ -94,21 +115,16 @@ class ChainVerifier
         return ChainVerificationResult::intact($rowsChecked);
     }
 
-    protected function decodePayload(string $payload, int $rowId): array
+    /**
+     * @throws \RuntimeException if the decoded payload is not an object
+     *
+     * @return array<string, mixed>
+     */
+    protected function decodePayload(string $payload): array
     {
-        try {
-            $decoded = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
-        } catch (JsonException $exception) {
-            throw new RuntimeException(
-                sprintf('Invalid JSON payload in compliance_audit_chain row %d.', $rowId),
-                previous: $exception,
-            );
-        }
-
+        $decoded = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($decoded)) {
-            throw new RuntimeException(
-                sprintf('Expected JSON object payload in compliance_audit_chain row %d.', $rowId),
-            );
+            throw new RuntimeException('expected JSON object payload');
         }
 
         return $decoded;

@@ -7,6 +7,7 @@ namespace Compliance\Test\TestCase\Gobd;
 use Cake\Datasource\ConnectionManager;
 use Compliance\Gobd\AuditChainWriter;
 use Compliance\Gobd\ChainVerifier;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
 class ChainVerifierTest extends TestCase
@@ -56,6 +57,32 @@ class ChainVerifierTest extends TestCase
         $this->assertFalse($result->intact);
         $this->assertSame(2, $result->brokenRowId);
         $this->assertStringContainsString('hash mismatch', (string)$result->reason);
+    }
+
+    public function testVerifyReportsBrokenRowOnInvalidJsonPayload(): void
+    {
+        $this->seedChain();
+        ConnectionManager::get('test')->update(
+            'compliance_audit_chain',
+            ['payload' => 'not-json'],
+            ['id' => 2],
+        );
+
+        $result = (new ChainVerifier(ConnectionManager::get('test')))->verify();
+
+        $this->assertFalse($result->intact);
+        $this->assertSame(2, $result->brokenRowId);
+        $this->assertStringContainsString('invalid JSON payload', (string)$result->reason);
+    }
+
+    public function testVerifyRejectsNonPositiveChunkSize(): void
+    {
+        $this->seedChain();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('chunk size must be >= 1');
+
+        (new ChainVerifier(ConnectionManager::get('test')))->verify(0);
     }
 
     protected function seedChain(): void

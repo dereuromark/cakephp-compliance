@@ -157,10 +157,10 @@ Every create/update/delete is logged into `compliance_audit_chain` with a SHA-25
 
 ```bash
 bin/cake gobd verify_chain
+```
 
 The verifier streams the table in bounded memory and reports the first
 broken row id plus the reason for the break.
-```
 
 ## Documentation
 

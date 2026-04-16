@@ -275,10 +275,12 @@ Indexes on `transaction_id`, `(source, target_id)`, `hash`, `created`.
 
 `AuditChainWriter` wraps every `log()` / `logMany()` call in a
 transaction. On MySQL and Postgres it first acquires a per-table
-advisory lock and then reads the current chain tail with
+advisory lock (`GET_LOCK` / `pg_try_advisory_lock`) with a bounded
+10-second wait, then reads the current chain tail with
 `SELECT … FOR UPDATE`, so even the empty-table bootstrap case
-serializes cleanly. SQLite's database-level locking gives the same
-guarantee and the writer omits the extra hints there. SQL Server
+serializes cleanly and a stuck writer never hangs indefinitely.
+SQLite's database-level locking gives the same guarantee and the
+writer omits the extra hints there. SQL Server
 consumers should wrap the call in a SERIALIZABLE transaction — the
 plugin does not issue `WITH (UPDLOCK)` hints today.
 

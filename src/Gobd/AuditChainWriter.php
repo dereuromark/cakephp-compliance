@@ -23,10 +23,14 @@ use Throwable;
  *
  * ## Concurrency
  *
- * The writer wraps every `log()` call in a transaction and reads the
- * current chain tail with `SELECT ... FOR UPDATE` on MySQL and Postgres
- * so concurrent writers serialize on the tail. SQLite's file-level
- * locking provides the equivalent guarantee without an explicit hint.
+ * On MySQL and Postgres the writer first acquires a per-table advisory
+ * lock (`GET_LOCK` / `pg_try_advisory_lock`) with a bounded 10-second
+ * wait, then wraps every `log()` / `logMany()` call in a transaction and
+ * reads the current chain tail with `SELECT ... FOR UPDATE` so concurrent
+ * writers serialize on the tail even in the empty-table bootstrap case.
+ * SQLite's file-level locking provides the equivalent guarantee without
+ * an explicit hint, so the advisory lock and `FOR UPDATE` clause are
+ * safely omitted there.
  *
  * For production deployments, back the `compliance_audit_chain` table
  * with a DB-level `BEFORE UPDATE` / `BEFORE DELETE` trigger that rejects
@@ -190,13 +194,27 @@ class AuditChainWriter
             );
         }
 
+        $requiredColumns = [
+            'id',
+            'transaction_id',
+            'event_type',
+            'source',
+            'target_id',
+            'payload',
+            'prev_hash',
+            'hash',
+            'created',
+        ];
+
         $columns = $schema->columns();
-        foreach (['payload', 'prev_hash', 'hash'] as $column) {
-            if (!in_array($column, $columns, true)) {
-                throw new InvalidArgumentException(
-                    sprintf('GoBD audit chain table is missing required column `%s`.', $column),
-                );
-            }
+        $missingColumns = array_values(array_diff($requiredColumns, $columns));
+        if ($missingColumns !== []) {
+            throw new InvalidArgumentException(
+                sprintf(
+                    'GoBD audit chain table is missing required column(s): %s.',
+                    implode(', ', array_map(static fn (string $column): string => sprintf('`%s`', $column), $missingColumns)),
+                ),
+            );
         }
     }
 
@@ -218,9 +236,20 @@ class AuditChainWriter
 
         if (str_contains($driverClass, 'Postgres')) {
             [$key1, $key2] = $this->advisoryLockKeys($lockName);
-            $this->connection->execute('SELECT pg_advisory_lock(?, ?)', [$key1, $key2]);
+            $deadline = microtime(true) + 10.0;
 
-            return $lockName;
+            do {
+                $result = $this->connection
+                    ->execute('SELECT pg_try_advisory_lock(?, ?) AS acquired', [$key1, $key2])
+                    ->fetch('assoc');
+                if ((bool)($result['acquired'] ?? false)) {
+                    return $lockName;
+                }
+
+                usleep(100000);
+            } while (microtime(true) < $deadline);
+
+            throw new RuntimeException('Failed to acquire GoBD audit-chain write lock.');
         }
 
         return null;
