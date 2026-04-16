@@ -11,6 +11,7 @@ use Cake\Database\Connection;
 use Cake\Datasource\ConnectionManager;
 use Compliance\Gobd\ChainVerifier;
 use RuntimeException;
+use Throwable;
 
 /**
  * `bin/cake gobd verify_chain`
@@ -42,7 +43,14 @@ class VerifyChainCommand extends Command
 
     public function execute(Arguments $args, ConsoleIo $io): ?int
     {
-        $result = (new ChainVerifier($this->connection))->verify();
+        try {
+            $result = (new ChainVerifier($this->connection))->verify();
+        } catch (Throwable $exception) {
+            $io->error($exception->getMessage());
+
+            return static::CODE_ERROR;
+        }
+
         if ($result->rowsChecked === 0) {
             $io->out('Audit chain is empty — nothing to verify.');
 

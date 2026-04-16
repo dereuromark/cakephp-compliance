@@ -221,7 +221,7 @@ class AuditChainWriter
     protected function acquireChainWriteLock(): ?string
     {
         $driverClass = $this->connection->getDriver()::class;
-        $lockName = 'compliance_audit_chain:' . self::TABLE;
+        $lockName = 'compliance_audit_chain:' . $this->connection->config()['database'] . ':' . self::TABLE;
 
         if (str_contains($driverClass, 'Mysql')) {
             $result = $this->connection

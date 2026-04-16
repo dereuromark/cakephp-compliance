@@ -116,7 +116,7 @@ class ChainVerifier
     }
 
     /**
-     * @throws \RuntimeException if the decoded payload is not an object
+     * @throws \RuntimeException if the decoded payload is not an array/object
      *
      * @return array<string, mixed>
      */
@@ -124,7 +124,7 @@ class ChainVerifier
     {
         $decoded = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($decoded)) {
-            throw new RuntimeException('expected JSON object payload');
+            throw new RuntimeException('expected JSON array or object payload');
         }
 
         return $decoded;
