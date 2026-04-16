@@ -186,44 +186,105 @@ This is important because JSON field order is not stable across PHP versions, da
 
 ---
 
-## HashChainAuditPersister — wiring the chain into audit-stash
+## AuditChainWriter + AuditChainBehavior — wiring the chain
 
-Plugs into `dereuromark/cakephp-audit-stash` as a `PersisterInterface` implementation so every ORM mutation on audited tables automatically lands in the hash chain.
+The plugin ships two self-contained pieces of writing machinery — no
+dependency on any other audit plugin.
 
-### Setup
+### `Compliance.AuditChain` behavior for automatic ORM auditing
+
+Attach to any Table whose saves and deletes must land in the chain:
 
 ```php
 // src/Model/Table/InvoicesTable.php
 public function initialize(array $config): void
 {
     parent::initialize($config);
-    $this->addBehavior('AuditStash.AuditLog', [
-        'persister' => \Compliance\Gobd\Persister\HashChainAuditPersister::class,
-    ]);
+    $this->addBehavior('Compliance.AuditChain');
 }
 ```
 
-### Schema
+The behavior listens to `Model.afterSave` / `Model.afterDelete`, captures
+`$entity->toArray()` as the payload, and delegates to
+`AuditChainWriter::log()`. Sensitive fields (password hashes, 2FA
+secrets) should be marked `setHidden()` on the entity so they are
+absent from both the payload and the resulting hash.
 
-```sql
-CREATE TABLE compliance_audit_chain (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    transaction_id VARCHAR(100) NOT NULL,
-    event_type VARCHAR(20) NOT NULL,
-    source VARCHAR(100) NOT NULL,
-    target_id VARCHAR(100) NOT NULL,
-    payload TEXT NOT NULL,
-    prev_hash VARCHAR(64) NULL,
-    hash VARCHAR(64) NOT NULL,
-    created DATETIME NOT NULL
-);
+Optional behavior config:
 
-CREATE INDEX compliance_audit_chain_source ON compliance_audit_chain(source, target_id);
+```php
+$this->addBehavior('Compliance.AuditChain', [
+    'source' => 'Invoices',           // defaults to the table alias
+    'transactionId' => static fn ($entity) => $entity->get('transaction_uuid'),
+]);
 ```
+
+### `AuditChainWriter` for imperative, non-ORM events
+
+For DSGVO exports, data resets, administrative actions, or any other
+event that doesn't map cleanly to a single entity save, call the writer
+directly:
+
+```php
+use Compliance\Gobd\AuditChainWriter;
+
+$writer = new AuditChainWriter();
+$writer->log(
+    eventType: 'dsgvo_export',
+    source: 'Accounts',
+    targetId: (string)$account->id,
+    payload: [
+        'exported_by_user_id' => $user->id,
+        'exported_at' => (string)DateTime::now(),
+        'file_hash' => $sha256,
+    ],
+);
+```
+
+Batch operations that should live in one transaction use `logMany()`.
+
+### Table
+
+The plugin ships a migration for the `compliance_audit_chain` backing
+table — run it with the standard plugin migrate command:
+
+```bash
+bin/cake migrations migrate -p Compliance
+```
+
+Or wire it into your `composer.json` `migrate` script alongside the
+other plugin migrations.
+
+Columns:
+
+| Column           | Type         | Notes |
+|------------------|--------------|-------|
+| `id`             | auto-increment | |
+| `transaction_id` | VARCHAR(64)  | Optional grouping id for a logical unit of work |
+| `event_type`     | VARCHAR(32)  | `create` \| `update` \| `delete` \| custom verb |
+| `source`         | VARCHAR(128) | Typically the table alias |
+| `target_id`      | VARCHAR(128) | Primary key of the audited record as a string |
+| `payload`        | TEXT         | Canonical JSON of the audited payload |
+| `prev_hash`      | VARCHAR(64)  | SHA-256 of the previous row; null for the first row |
+| `hash`           | VARCHAR(64)  | SHA-256 of `(prev_hash \|\| canonical_json(payload))` |
+| `created`        | DATETIME     | |
+
+Indexes on `transaction_id`, `(source, target_id)`, `hash`, `created`.
+
+### Concurrency
+
+`AuditChainWriter` wraps every `log()` / `logMany()` call in a
+transaction and reads the current chain tail with
+`SELECT … FOR UPDATE` on MySQL and Postgres so concurrent writers
+serialize on the tail. SQLite's database-level locking gives the same
+guarantee and the writer omits the `FOR UPDATE` hint there. SQL Server
+consumers should wrap the call in a SERIALIZABLE transaction — the
+plugin does not issue `WITH (UPDLOCK)` hints today.
 
 ### Append-only discipline
 
-For production deployments, protect the table at the DB level against UPDATE and DELETE — the persister only INSERTs:
+The writer only INSERTs. For a full GoBD posture, protect the table at
+the DB level against UPDATE and DELETE:
 
 ```sql
 -- PostgreSQL
@@ -243,7 +304,8 @@ CREATE TRIGGER audit_chain_no_delete BEFORE DELETE ON compliance_audit_chain
 bin/cake gobd verify_chain
 ```
 
-Exit code `0` for intact, `1` for tampered. Reports the entry count.
+Exit code `0` for intact, `1` for tampered. Reports the entry count and
+the first offending row when a break is found.
 
 ---
 
@@ -270,12 +332,13 @@ Auto-discovery is deliberately not attempted — applications have to explicitly
 
 ## Test suite
 
-`tests/TestCase/Gobd/` has 29 tests covering:
+`tests/TestCase/Gobd/` covers:
 
 - HashChain correctness (genesis, determinism, order-independence, tamper detection, chain verification)
 - GobdBehavior (block delete inside retention, allow delete beyond retention)
 - ImmutabilityBehavior (edit draft, block edit on finalized, allow NULL→set transition, block delete on finalized)
-- HashChainAuditPersister (single event, chain append, tampering detection)
+- AuditChainWriter (single event, multi-event batch, hash continuity across calls, concurrency via `FOR UPDATE`)
+- AuditChainBehavior (create/update/delete lifecycle, hidden fields excluded, transactionId callback)
 - Both Commands (intact chain success, tampered chain failure, empty chain, registered tables)
 
 All tests run in under 100ms against in-memory SQLite. Zero external dependencies.

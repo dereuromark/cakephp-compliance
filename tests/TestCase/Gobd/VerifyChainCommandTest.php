@@ -4,15 +4,13 @@ declare(strict_types=1);
 
 namespace Compliance\Test\TestCase\Gobd;
 
-use AuditStash\Event\AuditCreateEvent;
-use AuditStash\Event\AuditUpdateEvent;
 use Cake\Console\Arguments;
 use Cake\Console\ConsoleIo;
 use Cake\Console\TestSuite\StubConsoleInput;
 use Cake\Console\TestSuite\StubConsoleOutput;
 use Cake\Datasource\ConnectionManager;
+use Compliance\Gobd\AuditChainWriter;
 use Compliance\Gobd\Command\VerifyChainCommand;
-use Compliance\Gobd\Persister\HashChainAuditPersister;
 use PHPUnit\Framework\TestCase;
 
 class VerifyChainCommandTest extends TestCase
@@ -79,11 +77,11 @@ class VerifyChainCommandTest extends TestCase
 
     protected function seedChain(): void
     {
-        $persister = new HashChainAuditPersister(ConnectionManager::get('test'));
-        $persister->logEvents([
-            new AuditCreateEvent('tx-1', 1, 'widgets', ['name' => 'Alpha'], null, null),
-            new AuditUpdateEvent('tx-2', 1, 'widgets', ['name' => 'Beta'], ['name' => 'Alpha'], null),
-            new AuditUpdateEvent('tx-3', 1, 'widgets', ['name' => 'Gamma'], ['name' => 'Beta'], null),
+        $writer = new AuditChainWriter(ConnectionManager::get('test'));
+        $writer->logMany([
+            ['event_type' => 'create', 'source' => 'widgets', 'target_id' => '1', 'payload' => ['name' => 'Alpha'], 'transaction_id' => 'tx-1'],
+            ['event_type' => 'update', 'source' => 'widgets', 'target_id' => '1', 'payload' => ['name' => 'Beta'], 'transaction_id' => 'tx-2'],
+            ['event_type' => 'update', 'source' => 'widgets', 'target_id' => '1', 'payload' => ['name' => 'Gamma'], 'transaction_id' => 'tx-3'],
         ]);
     }
 

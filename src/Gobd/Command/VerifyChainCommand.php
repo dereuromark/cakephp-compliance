@@ -9,8 +9,8 @@ use Cake\Console\Arguments;
 use Cake\Console\ConsoleIo;
 use Cake\Database\Connection;
 use Cake\Datasource\ConnectionManager;
+use Compliance\Gobd\AuditChainWriter;
 use Compliance\Gobd\HashChain;
-use Compliance\Gobd\Persister\HashChainAuditPersister;
 use RuntimeException;
 
 /**
@@ -46,7 +46,7 @@ class VerifyChainCommand extends Command
         $rows = $this->connection
             ->execute(
                 'SELECT id, payload, prev_hash, hash FROM '
-                . HashChainAuditPersister::TABLE
+                . AuditChainWriter::TABLE
                 . ' ORDER BY id ASC',
             )
             ->fetchAll('assoc') ?: [];
