@@ -60,6 +60,7 @@ class VerifyChainCommandTest extends TestCase
         );
         [$out, $code] = $this->runCommand();
         $this->assertStringContainsString('tampered', $out);
+        $this->assertStringContainsString('row id=1', $out);
         $this->assertSame(1, $code);
     }
 
@@ -72,6 +73,7 @@ class VerifyChainCommandTest extends TestCase
             ['id' => 2],
         );
         [$out, $code] = $this->runCommand();
+        $this->assertStringContainsString('row id=2', $out);
         $this->assertSame(1, $code);
     }
 

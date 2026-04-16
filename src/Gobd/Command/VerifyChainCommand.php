@@ -9,8 +9,7 @@ use Cake\Console\Arguments;
 use Cake\Console\ConsoleIo;
 use Cake\Database\Connection;
 use Cake\Datasource\ConnectionManager;
-use Compliance\Gobd\AuditChainWriter;
-use Compliance\Gobd\HashChain;
+use Compliance\Gobd\ChainVerifier;
 use RuntimeException;
 
 /**
@@ -43,38 +42,24 @@ class VerifyChainCommand extends Command
 
     public function execute(Arguments $args, ConsoleIo $io): ?int
     {
-        $rows = $this->connection
-            ->execute(
-                'SELECT id, payload, prev_hash, hash FROM '
-                . AuditChainWriter::TABLE
-                . ' ORDER BY id ASC',
-            )
-            ->fetchAll('assoc') ?: [];
-
-        if ($rows === []) {
+        $result = (new ChainVerifier($this->connection))->verify();
+        if ($result->rowsChecked === 0) {
             $io->out('Audit chain is empty — nothing to verify.');
 
             return static::CODE_SUCCESS;
         }
 
-        $entries = [];
-        foreach ($rows as $row) {
-            $entries[] = [
-                'payload' => (array)json_decode((string)$row['payload'], true),
-                'prev_hash' => $row['prev_hash'],
-                'hash' => (string)$row['hash'],
-            ];
-        }
-
-        if (HashChain::verify($entries)) {
-            $io->success(sprintf('Audit chain is intact (%d entries verified).', count($entries)));
+        if ($result->intact) {
+            $io->success(sprintf('Audit chain is intact (%d entries verified).', $result->rowsChecked));
 
             return static::CODE_SUCCESS;
         }
 
         $io->error(sprintf(
-            'Audit chain is tampered. Ran %d entries; verification failed.',
-            count($entries),
+            'Audit chain is tampered at row id=%d (position %d): %s',
+            (int)$result->brokenRowId,
+            $result->rowsChecked,
+            (string)$result->reason,
         ));
 
         return static::CODE_ERROR;

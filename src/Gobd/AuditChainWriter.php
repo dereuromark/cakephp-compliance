@@ -7,7 +7,9 @@ namespace Compliance\Gobd;
 use Cake\Database\Connection;
 use Cake\Datasource\ConnectionManager;
 use Cake\I18n\DateTime;
+use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 /**
  * Writes GoBD-compliant audit entries into the `compliance_audit_chain`
@@ -71,21 +73,28 @@ class AuditChainWriter
         array $payload,
         ?string $transactionId = null,
     ): void {
-        $this->connection->transactional(function () use ($eventType, $source, $targetId, $payload, $transactionId): void {
-            $prevHash = $this->loadTailHashForUpdate();
-            $hash = HashChain::hash($prevHash, $payload);
+        $this->assertHashChainReady();
 
-            $this->connection->insert(self::TABLE, [
-                'transaction_id' => $transactionId,
-                'event_type' => $eventType,
-                'source' => $source,
-                'target_id' => $targetId,
-                'payload' => $this->encode($payload),
-                'prev_hash' => $prevHash,
-                'hash' => $hash,
-                'created' => (new DateTime())->format('Y-m-d H:i:s'),
-            ]);
-        });
+        $lockHandle = $this->acquireChainWriteLock();
+        try {
+            $this->connection->transactional(function () use ($eventType, $source, $targetId, $payload, $transactionId): void {
+                $prevHash = $this->loadTailHashForUpdate();
+                $hash = HashChain::hash($prevHash, $payload);
+
+                $this->connection->insert(self::TABLE, [
+                    'transaction_id' => $transactionId,
+                    'event_type' => $eventType,
+                    'source' => $source,
+                    'target_id' => $targetId,
+                    'payload' => $this->encode($payload),
+                    'prev_hash' => $prevHash,
+                    'hash' => $hash,
+                    'created' => (new DateTime())->format('Y-m-d H:i:s'),
+                ]);
+            });
+        } finally {
+            $this->releaseChainWriteLock($lockHandle);
+        }
     }
 
     /**
@@ -101,27 +110,34 @@ class AuditChainWriter
             return;
         }
 
-        $this->connection->transactional(function () use ($entries): void {
-            $prevHash = $this->loadTailHashForUpdate();
+        $this->assertHashChainReady();
 
-            foreach ($entries as $entry) {
-                $payload = $entry['payload'];
-                $hash = HashChain::hash($prevHash, $payload);
+        $lockHandle = $this->acquireChainWriteLock();
+        try {
+            $this->connection->transactional(function () use ($entries): void {
+                $prevHash = $this->loadTailHashForUpdate();
 
-                $this->connection->insert(self::TABLE, [
-                    'transaction_id' => $entry['transaction_id'] ?? null,
-                    'event_type' => $entry['event_type'],
-                    'source' => $entry['source'],
-                    'target_id' => $entry['target_id'] ?? null,
-                    'payload' => $this->encode($payload),
-                    'prev_hash' => $prevHash,
-                    'hash' => $hash,
-                    'created' => (new DateTime())->format('Y-m-d H:i:s'),
-                ]);
+                foreach ($entries as $entry) {
+                    $payload = $entry['payload'];
+                    $hash = HashChain::hash($prevHash, $payload);
 
-                $prevHash = $hash;
-            }
-        });
+                    $this->connection->insert(self::TABLE, [
+                        'transaction_id' => $entry['transaction_id'] ?? null,
+                        'event_type' => $entry['event_type'],
+                        'source' => $entry['source'],
+                        'target_id' => $entry['target_id'] ?? null,
+                        'payload' => $this->encode($payload),
+                        'prev_hash' => $prevHash,
+                        'hash' => $hash,
+                        'created' => (new DateTime())->format('Y-m-d H:i:s'),
+                    ]);
+
+                    $prevHash = $hash;
+                }
+            });
+        } finally {
+            $this->releaseChainWriteLock($lockHandle);
+        }
     }
 
     /**
@@ -161,5 +177,91 @@ class AuditChainWriter
             $payload,
             JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
         );
+    }
+
+    protected function assertHashChainReady(): void
+    {
+        try {
+            $schema = $this->connection->getSchemaCollection()->describe(self::TABLE);
+        } catch (Throwable $exception) {
+            throw new InvalidArgumentException(
+                'GoBD audit chain table is missing. Run the compliance migration before writing audit entries.',
+                previous: $exception,
+            );
+        }
+
+        $columns = $schema->columns();
+        foreach (['payload', 'prev_hash', 'hash'] as $column) {
+            if (!in_array($column, $columns, true)) {
+                throw new InvalidArgumentException(
+                    sprintf('GoBD audit chain table is missing required column `%s`.', $column),
+                );
+            }
+        }
+    }
+
+    protected function acquireChainWriteLock(): ?string
+    {
+        $driverClass = $this->connection->getDriver()::class;
+        $lockName = 'compliance_audit_chain:' . self::TABLE;
+
+        if (str_contains($driverClass, 'Mysql')) {
+            $result = $this->connection
+                ->execute('SELECT GET_LOCK(?, 10) AS acquired', [$lockName])
+                ->fetch('assoc');
+            if ((int)($result['acquired'] ?? 0) !== 1) {
+                throw new RuntimeException('Failed to acquire GoBD audit-chain write lock.');
+            }
+
+            return $lockName;
+        }
+
+        if (str_contains($driverClass, 'Postgres')) {
+            [$key1, $key2] = $this->advisoryLockKeys($lockName);
+            $this->connection->execute('SELECT pg_advisory_lock(?, ?)', [$key1, $key2]);
+
+            return $lockName;
+        }
+
+        return null;
+    }
+
+    protected function releaseChainWriteLock(?string $lockHandle): void
+    {
+        if ($lockHandle === null) {
+            return;
+        }
+
+        $driverClass = $this->connection->getDriver()::class;
+        if (str_contains($driverClass, 'Mysql')) {
+            $this->connection->execute('SELECT RELEASE_LOCK(?)', [$lockHandle]);
+
+            return;
+        }
+
+        if (str_contains($driverClass, 'Postgres')) {
+            [$key1, $key2] = $this->advisoryLockKeys($lockHandle);
+            $this->connection->execute('SELECT pg_advisory_unlock(?, ?)', [$key1, $key2]);
+        }
+    }
+
+    /**
+     * @return array{int, int}
+     */
+    protected function advisoryLockKeys(string $lockName): array
+    {
+        return [
+            $this->toSignedInt32(crc32('compliance')),
+            $this->toSignedInt32(crc32($lockName)),
+        ];
+    }
+
+    protected function toSignedInt32(int $value): int
+    {
+        if ($value <= 0x7fffffff) {
+            return $value;
+        }
+
+        return $value - 0x100000000;
     }
 }
