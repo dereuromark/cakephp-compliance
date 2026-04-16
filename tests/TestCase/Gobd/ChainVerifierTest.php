@@ -4,16 +4,13 @@ declare(strict_types=1);
 
 namespace Compliance\Test\TestCase\Gobd;
 
-use Cake\Console\Arguments;
-use Cake\Console\ConsoleIo;
-use Cake\Console\TestSuite\StubConsoleInput;
-use Cake\Console\TestSuite\StubConsoleOutput;
 use Cake\Datasource\ConnectionManager;
 use Compliance\Gobd\AuditChainWriter;
-use Compliance\Gobd\Command\VerifyChainCommand;
+use Compliance\Gobd\ChainVerifier;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
-class VerifyChainCommandTest extends TestCase
+class ChainVerifierTest extends TestCase
 {
     protected function setUp(): void
     {
@@ -23,10 +20,10 @@ class VerifyChainCommandTest extends TestCase
         $connection->execute(
             'CREATE TABLE compliance_audit_chain (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                transaction_id VARCHAR(100) NOT NULL,
+                transaction_id VARCHAR(100) NULL,
                 event_type VARCHAR(20) NOT NULL,
                 source VARCHAR(100) NOT NULL,
-                target_id VARCHAR(100) NOT NULL,
+                target_id VARCHAR(100) NULL,
                 payload TEXT NOT NULL,
                 prev_hash VARCHAR(64) NULL,
                 hash VARCHAR(64) NOT NULL,
@@ -35,46 +32,57 @@ class VerifyChainCommandTest extends TestCase
         );
     }
 
-    public function testIntactChainReturnsSuccess(): void
+    public function testVerifyReportsIntactChainAcrossChunks(): void
     {
         $this->seedChain();
-        [$out, $code] = $this->runCommand();
-        $this->assertStringContainsString('chain is intact', $out);
-        $this->assertSame(0, $code);
+
+        $result = (new ChainVerifier(ConnectionManager::get('test')))->verify(1);
+
+        $this->assertTrue($result->intact, (string)$result->reason);
+        $this->assertSame(3, $result->rowsChecked);
+        $this->assertNull($result->brokenRowId);
     }
 
-    public function testEmptyChainIsConsideredIntact(): void
-    {
-        [$out, $code] = $this->runCommand();
-        $this->assertSame(0, $code);
-        $this->assertStringContainsString('empty', $out);
-    }
-
-    public function testTamperedPayloadReportsFailure(): void
+    public function testVerifyReportsBrokenRowAndReason(): void
     {
         $this->seedChain();
         ConnectionManager::get('test')->update(
             'compliance_audit_chain',
             ['payload' => '{"name":"Hacked"}'],
-            ['id' => 1],
+            ['id' => 2],
         );
-        [$out, $code] = $this->runCommand();
-        $this->assertStringContainsString('tampered', $out);
-        $this->assertStringContainsString('row id=1', $out);
-        $this->assertSame(1, $code);
+
+        $result = (new ChainVerifier(ConnectionManager::get('test')))->verify();
+
+        $this->assertFalse($result->intact);
+        $this->assertSame(2, $result->brokenRowId);
+        $this->assertStringContainsString('hash mismatch', (string)$result->reason);
     }
 
-    public function testMutatedHashReportsFailure(): void
+    public function testVerifyReportsBrokenRowOnInvalidJsonPayload(): void
     {
         $this->seedChain();
         ConnectionManager::get('test')->update(
             'compliance_audit_chain',
-            ['hash' => str_repeat('0', 64)],
+            ['payload' => 'not-json'],
             ['id' => 2],
         );
-        [$out, $code] = $this->runCommand();
-        $this->assertStringContainsString('row id=2', $out);
-        $this->assertSame(1, $code);
+
+        $result = (new ChainVerifier(ConnectionManager::get('test')))->verify();
+
+        $this->assertFalse($result->intact);
+        $this->assertSame(2, $result->brokenRowId);
+        $this->assertStringContainsString('invalid JSON payload', (string)$result->reason);
+    }
+
+    public function testVerifyRejectsNonPositiveChunkSize(): void
+    {
+        $this->seedChain();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('chunk size must be >= 1');
+
+        (new ChainVerifier(ConnectionManager::get('test')))->verify(0);
     }
 
     protected function seedChain(): void
@@ -85,21 +93,5 @@ class VerifyChainCommandTest extends TestCase
             ['event_type' => 'update', 'source' => 'widgets', 'target_id' => '1', 'payload' => ['name' => 'Beta'], 'transaction_id' => 'tx-2'],
             ['event_type' => 'update', 'source' => 'widgets', 'target_id' => '1', 'payload' => ['name' => 'Gamma'], 'transaction_id' => 'tx-3'],
         ]);
-    }
-
-    /**
-     * @return array{0: string, 1: int}
-     */
-    protected function runCommand(): array
-    {
-        $command = new VerifyChainCommand(ConnectionManager::get('test'));
-        $output = new StubConsoleOutput();
-        $io = new ConsoleIo($output, $output, new StubConsoleInput([]));
-        $args = new Arguments([], [], []);
-
-        $code = $command->execute($args, $io);
-        $outText = implode("\n", $output->messages());
-
-        return [$outText, (int)$code];
     }
 }

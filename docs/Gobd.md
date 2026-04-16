@@ -274,10 +274,13 @@ Indexes on `transaction_id`, `(source, target_id)`, `hash`, `created`.
 ### Concurrency
 
 `AuditChainWriter` wraps every `log()` / `logMany()` call in a
-transaction and reads the current chain tail with
-`SELECT … FOR UPDATE` on MySQL and Postgres so concurrent writers
-serialize on the tail. SQLite's database-level locking gives the same
-guarantee and the writer omits the `FOR UPDATE` hint there. SQL Server
+transaction. On MySQL and Postgres it first acquires a per-table
+advisory lock (`GET_LOCK` / `pg_try_advisory_lock`) with a bounded
+10-second wait, then reads the current chain tail with
+`SELECT … FOR UPDATE`, so even the empty-table bootstrap case
+serializes cleanly and a stuck writer never hangs indefinitely.
+SQLite's database-level locking gives the same guarantee and the
+writer omits the extra hints there. SQL Server
 consumers should wrap the call in a SERIALIZABLE transaction — the
 plugin does not issue `WITH (UPDLOCK)` hints today.
 
@@ -304,8 +307,8 @@ CREATE TRIGGER audit_chain_no_delete BEFORE DELETE ON compliance_audit_chain
 bin/cake gobd verify_chain
 ```
 
-Exit code `0` for intact, `1` for tampered. Reports the entry count and
-the first offending row when a break is found.
+Exit code `0` for intact, `1` for tampered. Reports the entry count,
+first offending row id, and a short reason when a break is found.
 
 ---
 
@@ -313,7 +316,7 @@ the first offending row when a break is found.
 
 ### `bin/cake gobd verify_chain`
 
-Walks the `compliance_audit_chain` table in order and asserts every hash matches `HashChain::hash(prev_hash, payload)`. Run as a scheduled task (daily/weekly) and before any Kassenprüfung.
+Walks the `compliance_audit_chain` table in order and asserts every hash matches `HashChain::hash(prev_hash, payload)`. Verification is streamed in chunks, so the command stays bounded in memory on larger audit tables. Run as a scheduled task (daily/weekly) and before any Kassenprüfung.
 
 ### `bin/cake gobd retention_report`
 
