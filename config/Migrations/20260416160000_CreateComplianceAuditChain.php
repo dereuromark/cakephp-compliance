@@ -22,6 +22,16 @@ class CreateComplianceAuditChain extends BaseMigration
     public function change(): void
     {
         $this->table('compliance_audit_chain')
+            ->addColumn('account_id', 'integer', [
+                'null' => true,
+                'default' => null,
+                'comment' => 'Tenant account FK for multi-tenant scoping. Nullable for single-tenant apps.',
+            ])
+            ->addColumn('user_id', 'integer', [
+                'null' => true,
+                'default' => null,
+                'comment' => 'Acting user FK. Nullable for system-initiated events.',
+            ])
             ->addColumn('transaction_id', 'string', [
                 'limit' => 64,
                 'null' => true,
@@ -60,6 +70,7 @@ class CreateComplianceAuditChain extends BaseMigration
                 'comment' => 'SHA-256 of (prev_hash || canonical_json(payload)).',
             ])
             ->addColumn('created', 'datetime', ['null' => false])
+            ->addIndex(['account_id'], ['name' => 'idx_compliance_audit_chain_account'])
             ->addIndex(['transaction_id'], ['name' => 'idx_compliance_audit_chain_transaction'])
             ->addIndex(['source', 'target_id'], ['name' => 'idx_compliance_audit_chain_source_target'])
             ->addIndex(['hash'], ['name' => 'idx_compliance_audit_chain_hash'])

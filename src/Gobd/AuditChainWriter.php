@@ -69,6 +69,8 @@ class AuditChainWriter
      * @param string|null $targetId Primary key of the audited record, as a string
      * @param array<string, mixed> $payload Arbitrary structured data for the audit trail
      * @param string|null $transactionId Opaque identifier to group entries from one logical unit of work
+     * @param int|null $accountId Tenant account FK for multi-tenant scoping (nullable for single-tenant apps)
+     * @param int|null $userId Acting user FK (nullable for system-initiated events)
      */
     public function log(
         string $eventType,
@@ -76,16 +78,20 @@ class AuditChainWriter
         ?string $targetId,
         array $payload,
         ?string $transactionId = null,
+        ?int $accountId = null,
+        ?int $userId = null,
     ): void {
         $this->assertHashChainReady();
 
         $lockHandle = $this->acquireChainWriteLock();
         try {
-            $this->connection->transactional(function () use ($eventType, $source, $targetId, $payload, $transactionId): void {
+            $this->connection->transactional(function () use ($eventType, $source, $targetId, $payload, $transactionId, $accountId, $userId): void {
                 $prevHash = $this->loadTailHashForUpdate();
                 $hash = HashChain::hash($prevHash, $payload);
 
                 $this->connection->insert(self::TABLE, [
+                    'account_id' => $accountId,
+                    'user_id' => $userId,
                     'transaction_id' => $transactionId,
                     'event_type' => $eventType,
                     'source' => $source,
@@ -106,7 +112,7 @@ class AuditChainWriter
      * chain in argument order. Use when a logical unit of work produces
      * several audit rows and you want them atomic.
      *
-     * @param array<int, array{event_type: string, source: string, target_id?: string|null, payload: array<string, mixed>, transaction_id?: string|null}> $entries
+     * @param array<int, array{event_type: string, source: string, target_id?: string|null, payload: array<string, mixed>, transaction_id?: string|null, account_id?: int|null, user_id?: int|null}> $entries
      */
     public function logMany(array $entries): void
     {
@@ -126,6 +132,8 @@ class AuditChainWriter
                     $hash = HashChain::hash($prevHash, $payload);
 
                     $this->connection->insert(self::TABLE, [
+                        'account_id' => $entry['account_id'] ?? null,
+                        'user_id' => $entry['user_id'] ?? null,
                         'transaction_id' => $entry['transaction_id'] ?? null,
                         'event_type' => $entry['event_type'],
                         'source' => $entry['source'],

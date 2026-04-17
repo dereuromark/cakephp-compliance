@@ -50,6 +50,12 @@ class AuditChainBehavior extends Behavior
         // action touches several tables and you want all their audit rows
         // to share an id.
         'transactionId' => null,
+        // Entity field name holding the tenant account FK. Set to null to
+        // skip (single-tenant apps). Defaults to 'account_id'.
+        'accountIdField' => 'account_id',
+        // Entity field name holding the acting user FK. Set to null to
+        // skip. Defaults to null (system-level auditing by default).
+        'userIdField' => null,
     ];
 
     protected AuditChainWriter $writer;
@@ -78,6 +84,8 @@ class AuditChainBehavior extends Behavior
             targetId: $this->extractId($entity),
             payload: $entity->toArray(),
             transactionId: $this->resolveTransactionId($entity),
+            accountId: $this->extractInt($entity, $this->getConfig('accountIdField')),
+            userId: $this->extractInt($entity, $this->getConfig('userIdField')),
         );
     }
 
@@ -95,6 +103,8 @@ class AuditChainBehavior extends Behavior
             targetId: $this->extractId($entity),
             payload: $entity->toArray(),
             transactionId: $this->resolveTransactionId($entity),
+            accountId: $this->extractInt($entity, $this->getConfig('accountIdField')),
+            userId: $this->extractInt($entity, $this->getConfig('userIdField')),
         );
     }
 
@@ -125,5 +135,16 @@ class AuditChainBehavior extends Behavior
         $result = $callback($entity);
 
         return $result === null ? null : (string)$result;
+    }
+
+    protected function extractInt(EntityInterface $entity, ?string $field): ?int
+    {
+        if ($field === null) {
+            return null;
+        }
+
+        $value = $entity->get($field);
+
+        return $value === null ? null : (int)$value;
     }
 }
