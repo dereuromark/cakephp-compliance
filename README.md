@@ -1,5 +1,6 @@
 # Compliance Plugin for CakePHP
 
+[![CI](https://github.com/dereuromark/cakephp-compliance/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dereuromark/cakephp-compliance/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Minimum PHP Version](https://img.shields.io/badge/php-%3E%3D%208.3-8892BF.svg)](https://php.net/)
 [![CakePHP](https://img.shields.io/badge/cakephp-%3E%3D%205.2-red.svg?style=flat-square)](https://cakephp.org/)
