@@ -20,6 +20,8 @@ class ChainVerifierTest extends TestCase
         $connection->execute(
             'CREATE TABLE compliance_audit_chain (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NULL,
+                user_id INTEGER NULL,
                 transaction_id VARCHAR(100) NULL,
                 event_type VARCHAR(20) NOT NULL,
                 source VARCHAR(100) NOT NULL,
